@@ -12,7 +12,10 @@ namespace CppCLRWinFormsProject {
 	using namespace System::Windows::Forms;
 	using namespace System::Data;
 	using namespace System::Drawing;
+	using namespace System::Drawing::Imaging;
 	using namespace System::Threading;
+	using namespace System::Text::RegularExpressions;
+
 	using namespace std;
 
 	using System::Runtime::InteropServices::Marshal;
@@ -27,6 +30,11 @@ namespace CppCLRWinFormsProject {
 		{
 			InitializeComponent();
 
+			bPnP_Arrival = false;
+			bPnP_Removal = false;
+			bPnP_DevNodeChange = false;
+			bAppQuiting = false;
+			bDeviceRefreshNeeded = false;
 		}
 
 	protected:
@@ -107,13 +115,12 @@ namespace CppCLRWinFormsProject {
 
 		//-!
 			//Vendor Commands
-			const Byte VX_AA = 0xAA;                //Init Vendor Command
-			const Byte VX_FE = 0xFE;                //Reg Vendor Command
-			const Byte VX_F5 = 0xF5;                //Start streaming Vendor Command
-			const Byte VX_FC = 0xFC;                //Lense switch between dark and Light Vendor Command
-			const Byte VX_F3 = 0xF3;                //Get 32 byte from device Vendor Command
-			const Byte VX_F4 = 0xF4;                //Set 32 byte to device Vendor Command
+			static int fps = 0;
+			static int frame = 0;
+			static DateTime t1;
+			static DateTime 	t2;
 
+			              
 			String^ configFile;
 			System::Windows::Forms::Application^ app;
 			
@@ -124,13 +131,16 @@ namespace CppCLRWinFormsProject {
 			static int Wd = 752;                    //int Wd = 752;
 			static int bytes = Wd * Ht;
 			int BufSz;
-
+			static int QueueSz;
+			static PUCHAR* buffers;
 			Byte* sample = new Byte[360960];
 			Bitmap^ bmp;
+			BitmapData ^bmpData;
 			delegate void UpdateUICallback();
-			UpdateUICallback^ updateUI;
+			static UpdateUICallback^ updateUI;
 
 			int IsoPktBlockSize;
+			Thread^ inThread;
 		//-!!
 
 #pragma region Windows Form Designer generated code
@@ -420,7 +430,10 @@ namespace CppCLRWinFormsProject {
 		if (PacketsPerXferBox->SelectedIndex == -1) PacketsPerXferBox->SelectedIndex = 5;
 		if (QueueLenBox->SelectedIndex == -1) QueueLenBox->SelectedIndex = 4;
 
+		bmp = gcnew Bitmap(Wd, Ht, PixelFormat::Format8bppIndexed);
+
 		GetStreamerDevice();
+		XferThread = gcnew Thread(gcnew ThreadStart(&XferLoop));
 	}
 	
 	private: System::Void Form_Closed(System::Object^ sender, System::Windows::Forms::FormClosedEventArgs^ e) {
@@ -460,5 +473,9 @@ namespace CppCLRWinFormsProject {
 	Void EndPointsBox_SelectedIndexChanged(System::Object^ sender, System::EventArgs^ e);
 
 	void sendData();
+
+	static void inImageData();
+
+	static void setVBlanking(int vB);
 };
 }

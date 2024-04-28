@@ -5,6 +5,8 @@
 
 namespace CppCLRWinFormsProject
 {
+    
+    TimeSpan elapsed;
 	void Form1::GetStreamerDevice()
 	{
         StartBtn->Enabled = false;
@@ -107,7 +109,7 @@ namespace CppCLRWinFormsProject
         int i = 0;
         
         // Allocate the arrays needed for queueing
-        PUCHAR* buffers = new PUCHAR[QueueSize];
+        buffers = new PUCHAR[QueueSize];
         CCyIsoPktInfo** isoPktInfos = new CCyIsoPktInfo * [QueueSize];
         PUCHAR* contexts = new PUCHAR[QueueSize];
         OVERLAPPED		inOvLap[MAX_QUEUE_SZ];
@@ -126,7 +128,7 @@ namespace CppCLRWinFormsProject
             memset(buffers[i], 0xEF, len);
         }
 
-        DateTime t1 = DateTime::Now;	// For calculating xfer rate
+        t1 = DateTime::Now;	// For calculating xfer rate
 
         // Queue-up the first batch of transfer requests
         for (i = 0; i < QueueSize; i++)
@@ -182,15 +184,13 @@ namespace CppCLRWinFormsProject
                 else
                     Failures++;
 
-            }
-
-            else // BULK Endpoint
+            }else // BULK Endpoint
             {
                 if (EndPt->FinishDataXfer(buffers[i], rLen, &inOvLap[i], contexts[i]))
                 {
                     Successes++;
                     BytesXferred += rLen;
-
+                    frame++;
                     if (bShowData)
                         Display16Bytes(buffers[i]);
                 }
@@ -219,7 +219,14 @@ namespace CppCLRWinFormsProject
             if (i == QueueSize) //Only update the display once each time through the Queue
             {
                 i = 0;
+                fps = frame;
+                frame = 0;
+                t2 = DateTime::Now;
+                elapsed = t2 - t1;
+                t1 = t2;
                 ShowStats(t1, BytesXferred, Successes, Failures);
+                if (bStreaming) updateUI->Invoke();
+                Thread::Sleep(0);
             }
 
         }  // End of the infinite loop
@@ -300,6 +307,74 @@ namespace CppCLRWinFormsProject
 
         SuccessBox->Text = successes.ToString();
         FailureBox->Text = failures.ToString();
+    }
+
+    void Form1::StatusUpdate() //show image
+    {
+        try {
+            fps = (int)(fps / elapsed.TotalSeconds);
+            if (fps < 60)
+            {
+                setVBlanking(33);
+                //return;
+                //pixelClkControl();
+            }
+            
+            bmpData = bmp->LockBits(System::Drawing::Rectangle(0, 0, Wd, Ht),ImageLockMode::WriteOnly, bmp->PixelFormat);
+            //Marshal::Copy(buffers, bmpData->Scan0, 0, QueueSize);
+            unsigned char* dest = static_cast<unsigned char*>(bmpData->Scan0.ToPointer());
+            int stride = bmpData->Stride;
+
+            for (int y = 0; y < Ht; y++)
+            {
+                for (int x = 0; x < Wd; x++)
+                {
+                    dest[y * stride + x * 3] = sample[(y * Wd + x) * 3];      // Blue
+                    dest[y * stride + x * 3 + 1] = sample[(y * Wd + x) * 3 + 1];  // Green
+                    dest[y * stride + x * 3 + 2] = sample[(y * Wd + x) * 3 + 2];  // Red
+                }
+            }
+            bmp->UnlockBits(bmpData);
+            picCamera->Image = bmp;
+
+        }
+        catch (Exception^ ex)
+        {
+
+        }
+    }
+    int vBlank = 33;
+    const Byte VX_AA = 0xAA;                //Init Vendor Command
+    const Byte VX_FE = 0xFE;                //Reg Vendor Command
+    const Byte VX_F5 = 0xF5;                //Start streaming Vendor Command
+    const Byte VX_FC = 0xFC;                //Lense switch between dark and Light Vendor Command
+    const Byte VX_F3 = 0xF3;                //Get 32 byte from device Vendor Command
+    const Byte VX_F4 = 0xF4;
+
+    void Form1::setVBlanking(int vB)
+    {
+        //int vBlank = Convert.ToInt32(txtVBlank.Text);
+        Byte *bufBegin = new Byte[3]{ 0x00, 0x00, 0x00 };
+
+        int dec = Convert::ToInt32(5);
+        bufBegin[0] = Convert::ToByte(0x05 & 0x00FF);
+        bufBegin[1] = Convert::ToByte((vB & 0xFF00) >> 8);
+        bufBegin[2] = Convert::ToByte(vB & 0x00FF);
+        LONG len = 0X03;
+        //Vendor Command Format : 0xFE to configure the Image Sensor and add the Header
+
+        CtrlEndPt->Target = CTL_XFER_TGT_TYPE::TGT_DEVICE;
+        CtrlEndPt->ReqType = CTL_XFER_REQ_TYPE::REQ_VENDOR;
+        CtrlEndPt->Direction = CTL_XFER_DIR_TYPE::DIR_TO_DEVICE;
+        CtrlEndPt->ReqCode = VX_FE;                               // to configure Image sensor
+        CtrlEndPt->Value = 0;
+        CtrlEndPt->Index = 0;
+        CtrlEndPt->XferData(bufBegin, len);
+        vBlank += 10;
+        if (vBlank > 820)
+        {
+            vBlank = 31;
+        }
     }
 
     void Form1::Display16Bytes(PUCHAR data)
@@ -426,14 +501,16 @@ namespace CppCLRWinFormsProject
             return;
         }
 
-        if (StartBtn->Text->Equals("Start"))
+        CtrlEndPt = USBDevice->ControlEndPt;
+        /*if (StartBtn->Text->Equals("Start"))
         {
-           sendData();
-            //EptsBox->Enabled = false;
+            sendData();
+
+            EptsBox->Enabled = false;
             StartBtn->Text = "Stop";
 
             BufSz = bytes;
-            int QueueSz = Convert::ToInt32(QueueBox->Text);
+            QueueSz = Convert::ToInt32(QueueBox->Text);
             PPX = Convert::ToInt32(PacketsPerXferBox->Text);
             EndPt->SetXferSize(Convert::ToInt32(QueueBox->Text));
             CCyIsocEndPoint* isoPt =(CCyIsocEndPoint*)EndPt;
@@ -454,7 +531,7 @@ namespace CppCLRWinFormsProject
                         IsoPktBlockSize = 0;
                     }
                     else {
-                        IsoPktBlockSize = num * sizeof(UInt16)*2;
+                        IsoPktBlockSize = num * Marshal::SizeOf<CCyIsoPktInfo>();
                     }                    
                 }
             }
@@ -462,20 +539,19 @@ namespace CppCLRWinFormsProject
                 IsoPktBlockSize = 0;
             }
 
-            XferThread = gcnew Thread(gcnew ThreadStart(&XferLoop));
-            XferThread->IsBackground = true;
-            XferThread->Priority = ThreadPriority::Highest;
-            XferThread->Start();
+            inThread = gcnew Thread(gcnew ThreadStart(&inImageData));
+            inThread->IsBackground = true;
+            inThread->Priority = ThreadPriority::Highest;
+            inThread->Start();
         }
         else {
-            if (XferThread->IsAlive)
+            if (inThread->IsAlive)
             {
-                if (XferThread->Join(10)) XferThread->Abort();
+                if (inThread->Join(10)) inThread->Abort();
 
             }
-        }
+        }*/
 
-        return;
         if (XferThread) {
             switch (XferThread->ThreadState)
             {
@@ -568,9 +644,56 @@ namespace CppCLRWinFormsProject
 
         string line;
         while (getline(infile, line)) {
-            
-        }
+            String^ newSystemString = gcnew String(line.c_str());
+            cli::array<System::String^> ^splitted = newSystemString->Split(',');
+            String ^first = splitted[0];
+            String^ second = splitted[1];
 
+            Regex^ regex = gcnew Regex("b0x[0-9A-Fa-f]+\b");
+
+            String^ numericPhone;
+            for each (Char c in second)
+            {
+                if (Char::IsDigit(c))
+                {
+                    numericPhone += c;
+                }
+            }
+            int decimalValue = Convert::ToInt32(numericPhone, 10);
+
+            for (Match^ match = regex->Match(first);match->Success; match = match->NextMatch())
+            {
+                if (match->Value->Length > 0)
+                {
+                    String^  cap = match->Value->Substring(2);
+                    int dec = Convert::ToInt32(cap, 16);
+                    bufBegin[0] = Convert::ToByte(dec & 0x00FF);
+                    bufBegin[1] = Convert::ToByte((decimalValue & 0xFF00) >> 8);
+                    bufBegin[2] = Convert::ToByte(decimalValue & 0x00FF);
+                    len = 0X03;
+                    //Vendor Command Format : 0xFE to configure the Image Sensor and add the Header
+                    CtrlEndPt->Target = CTL_XFER_TGT_TYPE::TGT_DEVICE;
+                    CtrlEndPt->ReqType = CTL_XFER_REQ_TYPE::REQ_VENDOR;
+                    CtrlEndPt->Direction = CTL_XFER_DIR_TYPE::DIR_TO_DEVICE;
+                    CtrlEndPt->ReqCode = VX_FE;
+                    CtrlEndPt->Value = 0;
+                    CtrlEndPt->Index = 0;
+                    CtrlEndPt->XferData(bufBegin, len);
+                    //statusBar1.Text = bufBegin.ToString();
+                }
+            }
+        }
+        len = 1;
+        bufBegin[0] = 0x01;
+        CtrlEndPt->Target = CTL_XFER_TGT_TYPE::TGT_DEVICE;
+        CtrlEndPt->ReqType = CTL_XFER_REQ_TYPE::REQ_VENDOR;
+        CtrlEndPt->Direction = CTL_XFER_DIR_TYPE::DIR_TO_DEVICE;
+        CtrlEndPt->ReqCode = VX_F5;
+        CtrlEndPt->Value = 0;
+        CtrlEndPt->Index = 0;
+        CtrlEndPt->XferData(bufBegin, len);
+
+        Thread::Sleep(0);
         // Close the file 
         infile.close();
     }
@@ -670,8 +793,23 @@ namespace CppCLRWinFormsProject
         EnforceValidPPX();
     }
     
-    void Form1::StatusUpdate()
+    void Form1::inImageData()
     {
 
+        /*Byte **cmdBufs = new Byte*[QueueSz];
+        Byte **xferBufs = new Byte*[QueueSz];
+        Byte **vLaps = new Byte*[QueueSz];*/
+
+        cli::array<cli::array<Byte> ^> ^cmdBufs = gcnew cli::array<cli::array<Byte>^>(QueueSz);
+        cli::pin_ptr<Byte> cmdBufferHandle = &cmdBufs[0][0];
+
+        cli::array<cli::array<Byte>^>^ xferBufs = gcnew cli::array<cli::array<Byte>^>(QueueSz);
+        cli::pin_ptr<Byte> xFerBufferHandle = &xferBufs[0][0];
+
+        cli::array<cli::array<Byte>^>^ ovLaps = gcnew cli::array<cli::array<Byte>^>(QueueSz);
+        cli::pin_ptr<Byte> overlapDataHandle = &ovLaps[0][0];
+
+
+        
     }
 }
